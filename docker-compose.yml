@@ -1,0 +1,62 @@
+services:
+  web:
+    build: .
+    command: ["npm", "start"]
+    environment:
+      API_INTERNAL_URL: http://api:4000
+    ports: ["3000:3000"]
+    depends_on:
+      api:
+        condition: service_healthy
+  api:
+    build: .
+    command: ["sh", "-c", "npx prisma migrate deploy --schema apps/api/prisma/schema.prisma && node apps/api/dist/main.js"]
+    environment:
+      DATABASE_URL: postgresql://marketflow:marketflow@postgres:5432/marketflow?schema=public
+      REDIS_HOST: redis
+      API_HOST: 0.0.0.0
+      APP_ORIGIN: http://localhost:3000
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-true}
+      ENABLE_OPENAPI: ${ENABLE_OPENAPI:-false}
+    volumes: ["marketflow_storage:/app/apps/api/storage"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:4000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: marketflow
+      POSTGRES_USER: marketflow
+      POSTGRES_PASSWORD: marketflow
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: ["marketflow_postgres:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+  redis:
+    image: redis:8-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports: ["127.0.0.1:6379:6379"]
+    volumes: ["marketflow_redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  marketflow_postgres:
+  marketflow_redis:
+  marketflow_storage:

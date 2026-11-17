@@ -1,0 +1,23 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/queues/marketplace-publishing.ts": {
+      "experimentalTriggers": [
+        {
+          "type": "queue/v2beta",
+          "topic": "marketplace-publishing"
+        }
+      ]
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path((?!queues(?:/|$)).*)",
+      "destination": "/index/api/:path"
+    },
+    {
+      "source": "/",
+      "destination": "/index/api/health"
+    }
+  ]
+}

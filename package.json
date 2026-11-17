@@ -1,0 +1,29 @@
+{
+  "name": "marketflow",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": ["apps/*"],
+  "scripts": {
+    "dev": "next dev",
+    "api:dev": "npm run dev --workspace @marketflow/api",
+    "api:build": "npm run build --workspace @marketflow/api",
+    "db:generate": "npm run db:generate --workspace @marketflow/api",
+    "db:migrate": "npm run db:migrate --workspace @marketflow/api",
+    "build": "next build",
+    "start": "next start",
+    "lint": "tsc --noEmit && npm run lint --workspace @marketflow/api",
+    "test": "npm run test --workspace @marketflow/api"
+  },
+  "dependencies": {
+    "class-validator": "0.15.1",
+    "next": "16.3.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.9.0"
+  }
+}
