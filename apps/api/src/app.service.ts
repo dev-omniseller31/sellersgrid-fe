@@ -66,6 +66,15 @@ export class AppService {
   async archiveProduct(session: SessionUser, id: string) { this.assertEditor(session); await this.getProduct(session, id); await this.db.product.update({ where: { id }, data: { status: "ARCHIVED" } }); await this.audit(session, "product.archived", "Product", id); return { ok: true }; }
   async updateInventory(session: SessionUser, id: string, stock: number) { this.assertEditor(session); await this.getProduct(session, id); const product = await this.db.product.update({ where: { id }, data: { stock } }); await this.audit(session, "inventory.updated", "Product", id, { stock }); return product; }
 
+  async updateProductCost(session: SessionUser, id: string, costPerUnit: number) {
+    this.assertEditor(session);
+    const product = await this.getProduct(session, id);
+    const attrs = (product.attributes as Record<string, unknown> | null) ?? {};
+    const updated = await this.db.product.update({ where: { id }, data: { attributes: { ...attrs, costPerUnit } as Prisma.InputJsonValue } });
+    await this.audit(session, "product.cost_updated", "Product", id, { costPerUnit });
+    return updated;
+  }
+
   async uploadImage(session: SessionUser, productId: string, file: Express.Multer.File) {
     this.assertEditor(session);
     await this.getProduct(session, productId);
@@ -207,6 +216,155 @@ export class AppService {
     return { ok: true };
   }
   async analytics(session: SessionUser) { const orders = await this.db.order.groupBy({ by: ["status"], where: { organizationId: session.organizationId }, _count: true, _sum: { total: true } }); const channels = await this.db.order.groupBy({ by: ["storeId"], where: { organizationId: session.organizationId }, _count: true, _sum: { total: true } }); return { orders, channels }; }
+
+  async profitability(session: SessionUser, days: number) {
+    const since = new Date(Date.now() - days * 86_400_000);
+
+    // All non-cancelled orders in period
+    const orders = await this.db.order.findMany({
+      where: { organizationId: session.organizationId, status: { not: "CANCELLED" }, orderedAt: { gte: since } },
+      include: { store: { select: { id: true, name: true, marketplace: true } } },
+      orderBy: { orderedAt: "asc" },
+    });
+
+    // Stores
+    const stores = await this.db.store.findMany({
+      where: { organizationId: session.organizationId },
+      select: { id: true, name: true, marketplace: true, _count: { select: { listings: true, orders: true } } },
+    });
+
+    // Products with listings
+    const products = await this.db.product.findMany({
+      where: { organizationId: session.organizationId, status: { not: "ARCHIVED" } },
+      select: { id: true, name: true, sku: true, price: true, stock: true, attributes: true, listings: { select: { storeId: true, status: true } } },
+    });
+
+    // ── Marketplace fee rates (industry standard approximations) ──
+    const feeRates: Record<string, number> = { AMAZON: 0.15, FLIPKART: 0.16, MYNTRA: 0.22, SHOPIFY: 0.03, EBAY: 0.13 };
+    // ── Shipping cost per order (flat approx) ──
+    const shippingPerOrder: Record<string, number> = { AMAZON: 98, FLIPKART: 105, MYNTRA: 0, SHOPIFY: 60, EBAY: 80 };
+
+    const totalRevenue = orders.reduce((s, o) => s + Number(o.total), 0);
+    const totalOrders = orders.length;
+
+    // ── By channel ──
+    const byChannel = stores.map(store => {
+      const storeOrders = orders.filter(o => o.storeId === store.id);
+      const revenue = storeOrders.reduce((s, o) => s + Number(o.total), 0);
+      const feeRate = feeRates[store.marketplace] ?? 0.15;
+      const shipRate = shippingPerOrder[store.marketplace] ?? 90;
+      const fees = revenue * feeRate;
+      const shipping = storeOrders.length * shipRate;
+      const productCost = revenue * 0.46; // 46% COGS estimate
+      const returns = revenue * 0.045;
+      const netProfit = revenue - fees - shipping - productCost - returns;
+      const margin = revenue > 0 ? (netProfit / revenue) * 100 : 0;
+      return {
+        storeId: store.id,
+        name: store.name,
+        marketplace: store.marketplace,
+        revenue,
+        orders: storeOrders.length,
+        fees,
+        feeRate: feeRate * 100,
+        shippingTotal: shipping,
+        shippingPerOrder: shipRate,
+        productCost,
+        returns,
+        netProfit,
+        netMargin: margin,
+        listings: store._count.listings,
+      };
+    }).filter(c => c.orders > 0).sort((a, b) => b.revenue - a.revenue);
+
+    // ── By product (estimated, using price × estimated sold qty) ──
+    const byProduct = products.map(p => {
+      const price = Number(p.price);
+      const attrs = p.attributes as Record<string, unknown> | null;
+      const costPerUnit = attrs?.costPerUnit ? Number(attrs.costPerUnit) : price * 0.46;
+      const publishedChannels = p.listings.filter(l => l.status === "PUBLISHED").length;
+      // Estimate units sold from orders (use total orders split evenly across published products)
+      const estimatedUnits = publishedChannels > 0
+        ? Math.max(1, Math.round(totalOrders / Math.max(products.filter(x => x.listings.some(l => l.status === "PUBLISHED")).length, 1)))
+        : 0;
+      const revenue = estimatedUnits * price;
+      const fees = revenue * 0.16;
+      const shipping = estimatedUnits * 100;
+      const productCost = estimatedUnits * costPerUnit;
+      const profitPerUnit = price - costPerUnit - (price * 0.16) - 100;
+      const totalProfit = profitPerUnit * estimatedUnits;
+      return {
+        id: p.id,
+        name: p.name,
+        sku: p.sku,
+        price,
+        costPerUnit,
+        estimatedUnits,
+        revenue,
+        fees,
+        shipping,
+        productCost,
+        profitPerUnit,
+        totalProfit,
+        margin: price > 0 ? (profitPerUnit / price) * 100 : 0,
+        publishedChannels,
+        stock: p.stock,
+      };
+    }).sort((a, b) => b.totalProfit - a.totalProfit);
+
+    // ── Overall waterfall ──
+    const totalFees = byChannel.reduce((s, c) => s + c.fees, 0);
+    const totalShipping = byChannel.reduce((s, c) => s + c.shippingTotal, 0);
+    const totalProductCost = totalRevenue * 0.46;
+    const totalReturns = totalRevenue * 0.045;
+    const totalNetProfit = totalRevenue - totalFees - totalShipping - totalProductCost - totalReturns;
+
+    // ── Weekly revenue trend (last 8 weeks) ──
+    const weeklyTrend = Array.from({ length: 8 }, (_, i) => {
+      const weekStart = new Date(since.getTime() + i * 7 * 86_400_000);
+      const weekEnd = new Date(weekStart.getTime() + 7 * 86_400_000);
+      const weekOrders = orders.filter(o => {
+        const d = new Date(o.orderedAt);
+        return d >= weekStart && d < weekEnd;
+      });
+      const breakdown: Record<string, number> = {};
+      stores.forEach(s => {
+        breakdown[s.name] = weekOrders.filter(o => o.storeId === s.id).reduce((sum, o) => sum + Number(o.total), 0);
+      });
+      return {
+        week: `W${i + 1}`,
+        label: weekStart.toLocaleDateString("en-IN", { month: "short", day: "numeric" }),
+        total: weekOrders.reduce((s, o) => s + Number(o.total), 0),
+        orders: weekOrders.length,
+        breakdown,
+      };
+    });
+
+    // ── Return / RTO rate ──
+    const cancelledOrders = await this.db.order.count({ where: { organizationId: session.organizationId, status: "CANCELLED", orderedAt: { gte: since } } });
+    const totalOrdersInPeriod = orders.length + cancelledOrders;
+    const returnRate = totalOrdersInPeriod > 0 ? (cancelledOrders / totalOrdersInPeriod) * 100 : 0;
+
+    return {
+      period: days,
+      summary: {
+        revenue: totalRevenue,
+        netProfit: totalNetProfit,
+        fees: totalFees,
+        shipping: totalShipping,
+        productCost: totalProductCost,
+        returns: totalReturns,
+        orders: totalOrders,
+        margin: totalRevenue > 0 ? (totalNetProfit / totalRevenue) * 100 : 0,
+        avgOrderValue: totalOrders > 0 ? totalRevenue / totalOrders : 0,
+        returnRate,
+      },
+      byChannel,
+      byProduct,
+      weeklyTrend,
+      storeNames: stores.reduce((m, s) => { m[s.id] = s.name; return m; }, {} as Record<string, string>),
+    };
+  }
   async updateSettings(session: SessionUser, dto: SettingsDto) { if (!(["OWNER","ADMIN"] as string[]).includes(session.role)) throw new UnauthorizedException(); return this.db.organization.update({ where: { id: session.organizationId }, data: { name: dto.organizationName } }); }
   audit(session: SessionUser, action: string, entityType: string, entityId?: string, metadata?: Record<string, unknown>) { return this.db.auditLog.create({ data: { organizationId: session.organizationId, userId: session.userId, action, entityType, entityId, metadata: metadata as Prisma.InputJsonValue | undefined } }); }
 }

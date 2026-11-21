@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import DashboardClient from "./DashboardClient";
+import DashboardShell from "./DashboardShell";
 
 export const metadata: Metadata = {
   title: "Commerce workspace",
@@ -7,5 +7,5 @@ export const metadata: Metadata = {
 };
 
 export default function DashboardPage() {
-  return <DashboardClient />;
+  return <DashboardShell />;
 }

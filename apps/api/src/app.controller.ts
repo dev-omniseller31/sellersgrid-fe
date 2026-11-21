@@ -41,6 +41,8 @@ export class AppController {
   @Get("orders") orders(@Req() req: AuthedRequest) { return this.service.listOrders(req.user); }
   @Patch("orders/:id") orderStatus(@Req() req: AuthedRequest, @Param("id", new ParseUUIDPipe({ version: "4" })) id: string, @Body() dto: OrderStatusDto) { return this.service.setOrderStatus(req.user, id, dto.status); }
   @Get("analytics") analytics(@Req() req: AuthedRequest) { return this.service.analytics(req.user); }
+  @Get("profitability") profitability(@Req() req: AuthedRequest, @Query("days") days = "30") { return this.service.profitability(req.user, Math.min(365, Math.max(7, Number(days) || 30))); }
+  @Patch("products/:id/cost") updateCost(@Req() req: AuthedRequest, @Param("id", new ParseUUIDPipe({ version: "4" })) id: string, @Body() body: { costPerUnit: number }) { return this.service.updateProductCost(req.user, id, body.costPerUnit); }
   @Patch("settings") settings(@Req() req: AuthedRequest, @Body() dto: SettingsDto) { return this.service.updateSettings(req.user, dto); }
   @Get("products-export.csv") @Header("Content-Type", "text/csv; charset=utf-8") @Header("Content-Disposition", "attachment; filename=marketflow-products.csv") async export(@Req() req: AuthedRequest) { const rows = await this.service.listProducts(req.user); const esc = (v: unknown) => `"${String(v ?? "").replaceAll('"','""')}"`; return ["Name,SKU,Category,Price,Stock,Status", ...rows.map(p => [p.name,p.sku,p.category,p.price,p.stock,p.status].map(esc).join(","))].join("\n"); }
 }

@@ -27,7 +27,7 @@ async function bootstrap() {
     res.setHeader("Cache-Control", "no-store");
     if (!["GET", "HEAD", "OPTIONS"].includes(req.method) && !req.path.startsWith("/api/webhooks/")) {
       const origin = req.get("origin");
-      if (origin !== process.env.APP_ORIGIN || req.get("x-marketflow-request") !== "web") return res.status(403).json({ message: "Request origin rejected" });
+      if (origin !== process.env.APP_ORIGIN || (req.get("x-sellersgrid-request") !== "web" && req.get("x-marketflow-request") !== "web")) return res.status(403).json({ message: "Request origin rejected" });
     }
     next();
   });

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 
 export const metadata: Metadata = {
-  title: "Sign in",
-  description: "Sign in to your MarketFlow seller workspace.",
+  title: "Sign in – SellersGrid",
+  description: "Sign in to your SellersGrid workspace.",
   alternates: { canonical: "/login" },
   robots: { index: false, follow: false, noarchive: true },
 };
